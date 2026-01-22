@@ -52,8 +52,8 @@ int main() {
     const double print_interval = 1e-6;         // Time interval for printing [s]
 
     // Temperature and saturation pressure initialization
-    std::vector<double> T(N);
-    std::vector<double> p_sat(N);
+    std::vector<double> T(N);           // [K]
+    std::vector<double> p_sat(N);       // [Pa]
 
     const double T_left = 500.0;        // [K]
     const double T_right = 300.0;       // [K]
@@ -170,18 +170,17 @@ int main() {
                 // Updating viscous conductance
                 const double G_visc_0 =
                     (M_PI * std::pow(r_v, 4)) /
-                    (8.0 * mu) * rho[i];                            // base Poiseuille
+                    (8.0 * mu) * rho[i];                            // [kgm/sPa]
 
-                // Slip / rarefaction correction
-                G_visc[i] = G_visc_0 * (1.0 + alpha * Kn[i]);
+                // Slip / rarefaction correction    
+                G_visc[i] = G_visc_0 * (1.0 + alpha * Kn[i]);       // [kgm/sPa]
 
-                // ---------------- Bosanquet -----------------
+                // Updating effective conductance
                 G_eff[i] =
-                    1.0 / (1.0 / G_visc[i] + 1.0 / G_mol[i]);
+                    1.0 / (1.0 / G_visc[i] + 1.0 / G_mol[i]);       // [kgm/sPa]
             }
 
-            // Assembly of the matrices
-            // Parallelizing here does not save time, even with 1000 nodes
+            // Assembly of the matrices (parallelization here does not save time)
             for (int i = 1; i < N - 1; ++i) {
 
                 // Updating mean free path
@@ -196,28 +195,29 @@ int main() {
                 const double beta =
                     1.0 / std::sqrt(2.0 * M_PI * R_vapor * T[i]);  // [s/m]
 
+                // Updating Hertz–Knudsen–Schrage mass flux
                 const double j_m =
-                    beta * (sigma_e * p_sat[i] - sigma_c * Omega * p[i]); // [kg/m2 s]
+                    beta * (sigma_e * p_sat[i] - sigma_c * Omega * p[i]); // [kg/m2s]
 
-                // ------------------ Volumetric source -------------
-                double S = j_m * (2.0 / r_v);  // [kg/m3 s]
+                // Converting mass flux to mass volumetric source
+                double S = j_m * (2.0 / r_v);  // [kg/m3s]
 
                 // Cannot condensate more mass than present in the cell
                 if (S < 0.0) {
-                    const double S_min = -rho[i] / dt;  // [kg/m3 s]
+                    const double S_min = -rho[i] / dt;  // [kg/m3s]
                     if (S < S_min) S = S_min;
                 }
 
                 Sm[i] = S;
 
-                // ------------------ Coefficienti su facce ------------------
+                // Faces coefficients
                 const double G_L = 0.5 * (G_eff[i - 1] + G_eff[i]);     // i-1/2
                 const double G_R = 0.5 * (G_eff[i] + G_eff[i + 1]);     // i+1/2
 
-                // ------------------ Termini temporali ----------------------
+                // Temporal term
                 const double invRTdt = 1.0 / (R_vapor * T[i] * dt);
 
-                // ------------------ TDMA coefficients ----------------------
+                // TDMA coefficients
                 a[i] = -G_L / (A_v * dz * dz);
 
                 b[i] = invRTdt
@@ -227,9 +227,9 @@ int main() {
 
                 d[i] = p[i] * invRTdt
                     + Sm[i];
-
             }
 
+            // Pressure BCs (Neumann at both sides)
             b[0] = 1.0;
             c[0] = -1.0;
 
@@ -238,11 +238,10 @@ int main() {
 
             tdma_solver.solve(a, b, c, d, p);
 
-            for (int i = 0; i < N; ++i) {
+            // Updating density
+            for (int i = 0; i < N; ++i) rho[i] = p[i] / (R_vapor * T[i]);
 
-                rho[i] = p[i] / (R_vapor * T[i]);
-            }
-
+            // Calculating Picard error
             double Aold, Anew, denom, eps;
 
             picard_error = 0.0;
